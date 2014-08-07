@@ -7,7 +7,6 @@ libjsonc.a: jsonc.o
 	$(CC) -c $(CFLAGS) $< -o $@
 
 test: jsonc_test
-	./jsonc_test
 
 jsonc_test: jsonc_test.o
 	$(CC) $< -o $@ -L. -ljsonc

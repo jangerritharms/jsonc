@@ -1,2 +1,2 @@
-map <leader>ll :!make<cr>
-map <leader>lv :!./test<cr>
+map <leader>ll :!make;make test<cr>
+map <leader>lv :!./jsonc_test<cr>

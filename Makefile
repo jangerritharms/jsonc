@@ -1,4 +1,4 @@
-all: libjsonc.a
+all: libjsonc.a jsonc_test
 	
 libjsonc.a: jsonc.o
 	$(AR) rc $@ $^

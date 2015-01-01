@@ -1,167 +1,269 @@
-#include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
 #include "jsonc.h"
 
-typedef enum{false, true} bool;
+void init_null(void*);
 
-char* get_string_from_file(const char * file_path){
-    FILE *fp;
-    long lSize;
-    char *string;
+json_array *json_parse_array(FILE*);
 
-    fp = fopen(file_path, "r");
+json_object *json_parse_file(FILE *fp){
+    json_object *root = NULL;
+    json_object *current = NULL;
+    json_object *next = NULL;
+    char cursor;
+    char *key;
+    parse_state p = INITIAL;
+    long temp;
+    json_type type;
+    int length;
+    int size;
+
     if (!fp) ERR("Error opening file");
 
-    fseek (fp, 0L, SEEK_END);
-    lSize = ftell(fp);
-    rewind(fp);
-
-    string = calloc(1, lSize+1);
-    if (!string) fclose(fp), ERR("Memory allocation failed");
-    if (1!=fread(string, lSize, 1, fp))
-        fclose(fp), ERR("Reading of file failed");
-    fclose(fp);
-
-    return string;
-}
-
-void json_parse_object(char *string, json_object *obj){
-    char * cursor;
-    parse_state p = INITIAL;
-    long ind=obj->start;
-    json_node *current = NULL;
-
-    for (cursor = string; *cursor != '\0'; cursor++,ind++){
-        putc(*cursor, stdout);
+    while(true){
+        cursor = fgetc(fp);
         switch (p){
             case INITIAL:
-                if (*cursor == '{'){
+                if (cursor == '{'){
                     p = SKIP;
                 }
                 break;
             case SKIP:
-                if (*cursor == '"'){
-                    if (!current){
-                        obj->first = calloc(1, sizeof(json_node));
-                        current = obj->first;
+                if (cursor == ','){
+                    if(!root){
+                        root = current = next;
                     }
-                    else {
-                        current->next = calloc(1, sizeof(json_node));
+                    else{
+                        current->next = next;
                         current = current->next;
                     }
-                    current->start_key = ind+1;
+                }
+                if (cursor == '"'){
+                    temp = ftell(fp);            
                     p = OPEN_KEY;
                 }
-                else if (*cursor == '}'){
-                    obj->length = ind - obj->start+1;
-                    return;
+                else if (cursor == '}'){
+                    if (!root)
+                        root = current = next;
+                    else{
+                        current->next = next;
+                    }
+                    return root;
                 }
                 break;
             case OPEN_KEY:
-                if (*cursor == '"'){
-                    current->key_length = ind - current->start_key;
+                if (cursor == '"'){
+                    length = ftell(fp)-temp;
+                    key = malloc(length * sizeof(char));
+                    fseek(fp,temp, SEEK_SET);
+                    fread(key, 1, length-1, fp);
+                    *(key+length) = '\0';
+                    fgetc(fp);
                     p = CLOSED_KEY;
                 }
                 break;
             case CLOSED_KEY:
-                if(*cursor == '"'){
-                    current->start = ind+1;
-                    current->type = JSON_STRING;
-                    p = OPEN_VALUE;
+                if(cursor == '"'){
+                    temp = ftell(fp);
+                    type = JSON_STRING;
+                    p = OPEN_STRING;
                 }
-                else if((*cursor >= '0' && *cursor <= '9') || *cursor == '-'){
-                    current->start = ind;
-                    current->type = JSON_NUMBER;
-                    p = OPEN_VALUE;
+                else if((cursor >= '0' && cursor <= '9') || cursor == '-'){
+                    ungetc(cursor, fp);
+                    size = sizeof(json_object)-1+sizeof(int);
+                    next = malloc(size);
+                    next->size = size;
+                    fscanf(fp, "%d", (int*)&(next->value));
+                    next->key = key;
+                    next->type = JSON_NUMBER;
+                    p = SKIP;
                 }
-                else if(*cursor == 'f' || *cursor == 't'){
-                    current->start = ind;
-                    current->type = JSON_BOOL;
-                    p = OPEN_VALUE;
+                else if (cursor == '{'){
+                    ungetc(cursor, fp);
+                    json_object *obj_temp =  json_parse_file(fp);
+                    size = sizeof(json_object)-1+obj_temp->size;
+                    next = malloc(size);
+                    next->size = size;
+                    memmove(&(next->value), obj_temp, obj_temp->size);
+                    next->key = key;
+                    next->type = JSON_OBJECT;
+                    p = SKIP;
                 }
-                else if(*cursor == 'n'){
-                    current->start = ind;
-                    current->type = JSON_NONE;
-                    p = OPEN_VALUE;
+                else if(cursor == 'f'){
+                    size = sizeof(json_object)-1+sizeof(bool);
+                    next = malloc(size);
+                    next->size = size;
+                    bool *bool_temp = (bool*)&(next->value);
+                    *bool_temp = false;
+                    next->key = key;
+                    next->type = JSON_OBJECT;
+                    p = SKIP;
                 }
-                else if(*cursor == '['){
-                    current->start = ind;
-                    current->type = JSON_ARRAY;
-                    p = OPEN_VALUE;
+                else if(cursor == 't'){
+                    size = sizeof(json_object)-1+sizeof(bool);
+                    next = malloc(size);
+                    next->size = size;
+                    bool *bool_temp = (bool*)&(next->value);
+                    *bool_temp = true;
+                    next->key = key;
+                    next->type = JSON_OBJECT;
+                    p = SKIP;
                 }
-                else if (*cursor == '{'){
-                    current->start = ind;
-                    current->type = JSON_OBJECT;
-                    p = OPEN_VALUE;
+                else if(cursor == 'n'){
+                    size = sizeof(json_object)-1+sizeof(void*);
+                    next = malloc(size);
+                    next->size = size;
+                    next->key = key;
+                    next->type = JSON_NONE;
+                    p = SKIP;
+                }
+                else if (cursor == '['){
+                    ungetc(cursor, fp);
+                    json_array* arr_temp = json_parse_array(fp);
+                    size = sizeof(json_object)-1+arr_temp->size;
+                    next = malloc(size); 
+                    next->size = size;
+                    memmove(&(next->value), arr_temp, arr_temp->size);
+                    next->key = key;
+                    next->type = JSON_ARRAY;
+                    p = SKIP;
                 }
                 break;
-            case OPEN_VALUE:
-                if (current->type == JSON_BOOL || current->type == JSON_NONE
-                        || current->type == JSON_NUMBER){
-                    if (*cursor == ' ' || *cursor == '\t' || *cursor == '\n'){
-                        current->length = ind - current->start ;
-                        p = SKIP;
-                    }
-                }
-                else if (current->type == JSON_ARRAY){
-                    if (*cursor == ']'){
-                        current->length = ind - current->start +1;
-                        p = SKIP;
-                    }
-                }
-                else if (current->type == JSON_OBJECT){
-                    if (*cursor == '}'){
-                        current->length = ind - current->start+1;
-                        p = SKIP;
-                    }
-                }
-                else {
-                    if (*cursor == '"'){
-                        current->length = ind - current->start ;
-                        p = SKIP;
-                    }
+            case OPEN_STRING:
+                if (cursor == '"'){
+                    length = ftell(fp)-temp;
+                    size  = sizeof(json_object)-1+length*sizeof(char);
+                    next = malloc(size);
+                    next->size = size;
+                    next->key = key;
+                    next->type = type;
+                    fseek(fp,temp, SEEK_SET);
+                    fread(next->value, 1, length-1, fp);fgetc(fp);
+                    *(next->value+length) = '\0';
+                    p = SKIP;
                 }
                 break;
         }
     }
+    return root;
 }
 
-json_node *json_find_node(const json_struct *js, const char* key){
-    json_node *j = js->root->first;
-    while(strncmp(key, js->string+j->start_key, j->key_length) && j->next)
-        j = j->next;
+json_array *json_parse_array(FILE *fp){
+    json_array *root = NULL;
+    json_array *current = NULL;
+    json_array *next = NULL;
+    char cursor;
+    array_parse_state p = A_INITIAL;
+    json_type type;
+    long temp;
+    int length;
+    int size;
 
-    if (strncmp(key, js->string+j->start_key, j->key_length)) ERR("Could not find key %s", key);
+    if (!fp) ERR("Error opening file");
 
-    return j;
-}
+    while(true){
+        cursor = fgetc(fp);
+        switch (p){
+            case A_INITIAL:
+                if (cursor == '['){
+                    p = A_SKIP;
+                }
+                break;
+            case A_SKIP:
+                if (cursor == ','){
+                    if(!root){
+                        root = current = next;
+                    }
+                    else{
+                        current->next = next;
+                        current = current->next;
+                    }
+                }
+                else if(cursor == '"'){
+                    temp = ftell(fp);
+                    type = JSON_STRING;
+                    p = A_OPEN_STRING;
+                }
+                else if((cursor >= '0' && cursor <= '9') || cursor == '-'){
+                    ungetc(cursor, fp);
+                    size = sizeof(json_array)-1+sizeof(int);
+                    next = malloc(size);
+                    next->size = size;
+                    fscanf(fp, "%d", (int*)&(next->value));
+                    next->type = JSON_NUMBER;
+                    p = A_SKIP;
+                }
+                else if (cursor == '{'){
+                    ungetc(cursor, fp);
+                    json_object *obj_temp =  json_parse_file(fp);
+                    size = sizeof(json_array)-1+obj_temp->size;
+                    next = malloc(size);
+                    next->size = size;
+                    memmove(&(next->value), obj_temp, obj_temp->size);
+                    next->type = JSON_OBJECT;
+                    p = A_SKIP;
+                }
+                else if(cursor == 'f'){
+                    size = sizeof(json_array)-1+sizeof(bool);
+                    next = malloc(size);
+                    next->size = size;
+                    bool *bool_temp = (bool*)&(next->value);
+                    *bool_temp = false;
+                    next->type = JSON_OBJECT;
+                    p = A_SKIP;
 
-void json_get_int(const json_struct *js, const char* key, int *value){
-    json_node *j = json_find_node(js, key);
-    if (j->type != JSON_NUMBER) ERR("Object %s is not of type NUMBER", key);
+                }
+                else if(cursor == 't'){
+                    size = sizeof(json_array)-1+sizeof(bool);
+                    next = malloc(size);
+                    next->size = size;
+                    bool *bool_temp = (bool*)&(next->value);
+                    *bool_temp = true;
+                    next->type = JSON_OBJECT;
+                    p = A_SKIP;
 
-    *value = atol(js->string+j->start_key);
-}
-
-void json_get_object(const json_struct *js, const char* key, json_object *value){
-    json_node *j = json_find_node(js, key);
-    if (j->type != JSON_OBJECT) ERR("Object %s is not of type OBJECT", key);
-    value->start = j->start;
-    json_parse_object(js->string+j->start, value);
-}
-
-void json_parse_file(const char * file_path, json_struct *obj){
-    obj->string = get_string_from_file(file_path);
-    obj->nelements = 0;
-    obj->root = calloc(1, sizeof(json_object));
-    json_parse_object(obj->string, obj->root);
-}
-
-void json_list_keys(const json_struct *js, const json_object *obj){
-    printf("Keys:\n");
-    json_node *j = obj->first;
-    do{
-        printf("%.*s\n", j->key_length, js->string+j->start_key);
-    }while((j=j->next));
+                }
+                else if(cursor == 'n'){
+                    size = sizeof(json_array)-1+sizeof(void*);
+                    next = malloc(size);
+                    next->size = size;
+                    next->type = JSON_NONE;
+                    p = A_SKIP;
+                }
+                else if (cursor == '['){
+                    ungetc(cursor, fp);
+                    json_array* arr_temp = json_parse_array(fp);
+                    size = sizeof(json_array)-1+arr_temp->size;
+                    next = malloc(size); 
+                    next->size = size;
+                    memmove(&(next->value), arr_temp, arr_temp->size);
+                    next->type = JSON_ARRAY;
+                    p = A_SKIP;
+                }
+                else if (cursor == ']'){
+                    if (!root)
+                        root = current = next;
+                    else{
+                        current->next = next;
+                    }
+                    return root;
+                }
+                break;
+            case A_OPEN_STRING:
+                if (cursor == '"'){
+                    length = ftell(fp)-temp;
+                    size = sizeof(json_array)-1+length*sizeof(char);
+                    next = malloc(size);
+                    next->size = size;
+                    next->type = type;
+                    fseek(fp,temp, SEEK_SET);
+                    fread(next->value, 1, length-1, fp);fgetc(fp);
+                    *(next->value+length) = '\0';
+                    p = A_SKIP;
+                }
+                break;
+        }
+    }
+    return root;
 }
